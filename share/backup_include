@@ -1,0 +1,10 @@
+/usr/local/
+/usr/share/
+/var/lib/
+/var/mail/
+/var/www/
+/var/games/
+/var/backups/
+/var/spool/cron/crontabs/
+/var/logs/
+/root/

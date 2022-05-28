@@ -1,0 +1,18 @@
+nimcache/
+htmldocs/
+
+testresults/
+outputGotten.txt
+outputExpected.txt
+
+
+.gdb_history
+
+
+
+# Xmake cache
+.xmake/
+build/
+
+# MacOS Cache
+.DS_Store
