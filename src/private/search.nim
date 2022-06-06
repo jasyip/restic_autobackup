@@ -26,11 +26,12 @@ proc addToStream(strm: FileStream; added: var uint; path: string) =
 
 
 
-proc getSpecialFiles*(strm: FileStream; baseDirs: openarray[string]): uint = 
+proc exclusions*(strm: FileStream; baseDirs: openarray[string]): uint = 
 
 
 
     template addPath(path: string) = addToStream(strm, result, path)
+    proc shouldExclude(curDir: string): bool = contains(curDir.lastPathPart, cacheRegex)
 
     for baseDir in baseDirs:
 
@@ -44,13 +45,13 @@ proc getSpecialFiles*(strm: FileStream; baseDirs: openarray[string]): uint =
 
         while stack.len > 0:
             let curDir: string = stack.popLast()
-            if not contains(curDir.lastPathPart, cacheRegex):
+            if curDir.shouldExclude:
                 # Keep traversing
                 addPath curDir
-
+            else:
 
                 for kind, nextPath in walkDir(curDir):
                     if kind == pcDir:
                         stack.addLast(nextPath)
-                    elif kind != pcLinkToDir:
+                    elif kind != pcLinkToDir and curDir.shouldExclude:
                         addPath nextPath

@@ -1,10 +1,11 @@
 
 
 from std/logging import
-                        newConsoleLogger, addHandler,
+                        ConsoleLogger, newConsoleLogger, addHandler,
                         info, notice, warn,
                         lvlAll, lvlNotice
 from std/monotimes import getMonoTime, `-`, MonoTime
+from std/options import some
 from std/os import `/`, parentDir, removeFile
 from std/osproc import startProcess, waitForExit, poParentStreams, poUsePath
 from std/sequtils import concat
@@ -14,10 +15,14 @@ from std/times import cpuTime
 from std/tempfiles import genTempPath
 
 
+import argparse
 
-from private/format import cpuTimePrint, monoTimePrint
-from private/search import getSpecialFiles
+
+from private/format import formatFloat, formatMonoTime
+from private/search import exclusions
 from private/parse import parseConfig
+
+
 
 
 
@@ -33,8 +38,7 @@ template info: auto = instantiationInfo(fullPaths = true)
 
 
 const
-    shareDir: string = info.fileName.parentDir.parentDir / "share"
-    cfgFile : string = shareDir / "restic.cfg"
+    defaultCfgFile : string = "/usr/local/share/restic_autobackup/backup.cfg"
 
 
 
@@ -55,11 +59,39 @@ const
 
 proc main =
 
-    var logger = newConsoleLogger(when defined(release): lvlNotice else: lvlAll)
-    addHandler(logger)
+    var p = newParser:
+        help("An executable to be called regularly to backup a good amount of flexible files through restic. Flexible configuration.")
+        option("-f", "--config-file", default=some(defaultCfgFile), help="A configuration file to be parsed.")
+        flag("-n", "--dry-run", help="Print the command of execution instead.")
+        flag("-d", "--debug", help="Print debugging statements to stdout")
+
+    var
+        cfgFile: string
+        dryRun: bool
+        logger: ConsoleLogger
+
+    try:
+        let opts = p.parse()
+
+        cfgFile = opts.configFile
+        dryRun = opts.dryRun
+        logger = newConsoleLogger(if opts.debug: lvlNotice else: lvlAll, useStdErr = true)
+        addHandler(logger)
 
 
-    var cfgFileStream: FileStream = openFileStream(cfgFile)
+    except ShortCircuit as e:
+        if e.flag == "argparse_help":
+            echo p.help
+            quit 1
+
+
+
+    var cfgFileStream: FileStream
+    try:
+        cfgFileStream = openFileStream(cfgFile)
+    except IOError:
+        raise newException(IOError, &"'{cfgFile}' does not exist or cannot be read.")
+
     let (baseDirs, resticOptions) = parseConfig(cfgFileStream, cfgFile)
 
 
@@ -78,16 +110,16 @@ proc main =
             startCpuTime  : float    = cpuTime()
             startMonoTime : MonoTime = getMonoTime()
 
-        let fileCount: uint = getSpecialFiles(strm, baseDirs)
+        let exclusionCount: uint = exclusions(strm, baseDirs)
 
         let
             endCpuTime  : float    = cpuTime()
             endMonoTime : MonoTime = getMonoTime()
 
         info(
-             &"Added {fileCount} dirs/files" & " " &
-             &"in {cpuTimePrint(endCpuTime - startCpuTime)} CPU seconds" & " and " &
-             &"{monoTimePrint(endMonoTime - startMonoTime)} seconds" & " " &
+             &"Noted {exclusionCount} dirs/files to exclude" & " " &
+             &"in {formatFloat(endCpuTime - startCpuTime)} CPU seconds" & " and " &
+             &"{formatMonoTime(endMonoTime - startMonoTime)} seconds" & " " &
               "for restic."
             )
 
@@ -96,14 +128,14 @@ proc main =
     let args: seq[string] = concat(
                                    @["backup"],
                                    resticOptions,
-                                   @["--files-from-raw", specialFilesPath],
+                                   @["--files-from-raw"], baseDirs,
+                                   @["--exclude-file", specialFilesPath],
                                   )
 
 
     var resticProcess = startProcess(
                                      "restic", args = args,
                                      options = {poParentStreams, poUsePath},
-                                     workingDir = shareDir,
                                     )
     let code = resticProcess.waitForExit()
 

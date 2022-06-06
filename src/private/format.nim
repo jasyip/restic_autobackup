@@ -12,26 +12,17 @@ from std/times import Duration, inNanoseconds
 const
     nanoDigits: uint = 9
     nano: uint64 = 10'u64 ^ cast[uint64](nanoDigits)
+    defaultSigFigs: uint = 5
+
+
+
+func formatFloat*(x: float, sigFigs: uint): string =
+    formatValue(result, x, &".{sigFigs}g")
 
 
 
 
-proc cpuTimePrint*(x: float; sigFigs = 5'u): string =
-
-    onFailedAssert(msg):
-        raise newException(ValueError, msg)
-
-    doAssert(sigFigs > 0, "'sigFigs' must be positive")
-
-    formatValue(result, x, &".{sigFigs - 1}g")
-
-
-func monoTimePrint*(x: Duration; sigFigs = 5'u): string =
-
-    onFailedAssert(msg):
-        raise newException(ValueError, msg)
-
-    doAssert(sigFigs > 0, "'sigFigs' must be positive")
+func formatMonoTime*(x: Duration; sigFigs = defaultSigFigs): string =
 
 
     let nanoseconds: int64 = inNanoseconds(x)
@@ -43,19 +34,21 @@ func monoTimePrint*(x: Duration; sigFigs = 5'u): string =
     if strLen > sigFigs:
 
         let simpleNanoseconds: int = parseInt(asString[0 ..< sigFigs])
-        let simpleSeconds: float = simpleNanoseconds /
-                                   cast[int](
-                                             10'u ^ (
-                                                     nanoDigits +
-                                                     sigFigs -
-                                                     strLen
-                                                    )
-                                            )
+        let simpleSeconds: float = (
+                                    simpleNanoseconds /
+                                    cast[int](
+                                              10'u ^ (
+                                                      nanoDigits +
+                                                      sigFigs -
+                                                      strLen
+                                                     )
+                                             )
+                                   )
 
-        formatValue(result, simpleSeconds, &".{sigFigs - 1}g")
+        formatFloat(simpleSeconds, sigFigs)
 
     else:
 
         let seconds: float = cast[int](nanoseconds) / cast[int](nano)
 
-        formatValue(result, seconds, &".{sigFigs - 1}g")
+        formatFloat(seconds, sigFigs)

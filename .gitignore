@@ -8,6 +8,9 @@ outputExpected.txt
 
 .gdb_history
 
+bin/
+tests-bin/
+
 
 
 # Xmake cache

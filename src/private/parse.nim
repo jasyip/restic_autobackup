@@ -35,7 +35,7 @@ func cfgDetails(event: CfgEvent; parser: CfgParser): string =
     )
 
 
-proc warnUnrecognizedCfg(event: CfgEvent; parser: CfgParser)=
+proc warnUnrecognizedCfg(event: CfgEvent; parser: CfgParser) =
     warn(
           cfgDetails(event, parser) &
           " will be ignored"
@@ -48,11 +48,14 @@ func badDirectoryCfg(event: CfgEvent; parser: CfgParser): string =
 
 proc parseConfig*(
                   cfgStream: Stream,
-                  streamName: string,
-                 ): tuple[
-                          baseDirs: seq[string],
-                          resticOptions: seq[string],
-                         ] =
+                  streamName = "",
+                 ):
+                 tuple[
+                  baseDirs: seq[string],
+                  resticOptions: seq[string],
+                 ]
+
+                 =
 
     var
         parser: CfgParser
