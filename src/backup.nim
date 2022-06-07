@@ -1,21 +1,19 @@
 
 
-from std/logging import
-                        ConsoleLogger, newConsoleLogger, addHandler,
-                        info, notice, warn,
-                        lvlAll, lvlNotice
 from std/monotimes import getMonoTime, `-`, MonoTime
 from std/options import some
-from std/os import `/`, parentDir, removeFile
+from std/os import `/`, parentDir, removeFile, getEnv
 from std/osproc import startProcess, waitForExit, poParentStreams, poUsePath
 from std/sequtils import concat
 from std/streams import openFileStream, close, FileStream
 from std/strformat import `&`
+from std/strutils import isEmptyOrWhitespace, join
 from std/times import cpuTime
 from std/tempfiles import genTempPath
 
 
 import argparse
+# import chronicles
 
 
 from private/format import formatFloat, formatMonoTime
@@ -34,11 +32,11 @@ from private/parse import parseConfig
 
 
 
-template info: auto = instantiationInfo(fullPaths = true)
 
 
 const
-    defaultCfgFile : string = "/usr/local/share/restic_autobackup/backup.cfg"
+    defaultCfgPath: string = "/usr/local/share/restic_autobackup/backup.cfg"
+    cfgPathEnvKey : string = "RESTIC_AUTOBACKUP_CFG_PATH"
 
 
 
@@ -59,25 +57,30 @@ const
 
 proc main =
 
+    let cfgPathEnvValue = getEnv(cfgPathEnvKey)
+
     var p = newParser:
         help("An executable to be called regularly to backup a good amount of flexible files through restic. Flexible configuration.")
-        option("-f", "--config-file", default=some(defaultCfgFile), help="A configuration file to be parsed.")
+        option("-f", "--config-file", help="A configuration file to be parsed.")
         flag("-n", "--dry-run", help="Print the command of execution instead.")
-        flag("-d", "--debug", help="Print debugging statements to stdout")
 
     var
         cfgFile: string
         dryRun: bool
-        logger: ConsoleLogger
 
     try:
         let opts = p.parse()
 
-        cfgFile = opts.configFile
+        cfgFile = (
+                   if not opts.configFile.isEmptyOrWhitespace:
+                      opts.configFile
+                   elif not cfgPathEnvValue.isEmptyOrWhitespace:
+                      notice &"Using {cfgPathEnvKey}='{cfgPathEnvValue}' as configuration file path"
+                      cfgPathEnvValue
+                   else:
+                      defaultCfgPath
+                  )
         dryRun = opts.dryRun
-        logger = newConsoleLogger(if opts.debug: lvlNotice else: lvlAll, useStdErr = true)
-        addHandler(logger)
-
 
     except ShortCircuit as e:
         if e.flag == "argparse_help":
@@ -125,26 +128,34 @@ proc main =
 
     info "Now executing restic command..."
 
-    let args: seq[string] = concat(
+    let
+        workingDir: string = cfgFile.parentDir
+        args: seq[string] = concat(
                                    @["backup"],
                                    resticOptions,
                                    @["--files-from-raw"], baseDirs,
                                    @["--exclude-file", specialFilesPath],
                                   )
 
+    var exitCode: int = 0
 
-    var resticProcess = startProcess(
-                                     "restic", args = args,
-                                     options = {poParentStreams, poUsePath},
-                                    )
-    let code = resticProcess.waitForExit()
+    if dryRun:
+        echo &"Executing at {workingDir}: " & "restic" & " " & join(args, ",")
+
+    else:
+        var resticProcess = startProcess(
+                                         "restic", args = args,
+                                         options = {poParentStreams, poUsePath},
+                                         workingDir = workingDir,
+                                        )
+        exitCode = resticProcess.waitForExit()
 
     removeFile(specialFilesPath)
 
-    if code != 0:
+    if exitCode != 0:
         info &"restic returned status code {code}"
 
-    quit code
+    quit exitCode
 
 
 

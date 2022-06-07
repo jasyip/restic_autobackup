@@ -1,14 +1,14 @@
 
 
 
-# import einheit
-import std/unittest
 
 from std/os import normalizePathEnd
 from std/sets import OrderedSet, toOrderedSet, initOrderedSet, `==`, incl
 from std/streams import newStringStream, StringStream
 from std/strutils import dedent
 from std/sugar import collect
+
+import unittest2
 
 from private/parse import parseConfig
 

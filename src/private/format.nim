@@ -16,7 +16,7 @@ const
 
 
 
-func formatFloat*(x: float, sigFigs: uint): string =
+func formatFloat*(x: float, sigFigs = defaultSigFigs): string =
     formatValue(result, x, &".{sigFigs}g")
 
 

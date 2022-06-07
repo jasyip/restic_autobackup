@@ -17,7 +17,7 @@ const cacheRegex = re"\b[cC]ache|CACHE\b"
 
 proc addToStream(strm: FileStream; added: var uint; path: string) =
     if added > 0:
-        strm.write("\0")
+        strm.write("\n")
 
     added += 1
 

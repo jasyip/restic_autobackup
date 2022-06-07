@@ -1,8 +1,6 @@
 
 
 
-# import einheit
-import std/unittest
 
 from std/os import normalizePathEnd
 from std/sets import OrderedSet, toOrderedSet, initOrderedSet, `==`, incl
@@ -10,11 +8,13 @@ from std/streams import newStringStream, StringStream
 from std/strutils import dedent
 from std/sugar import collect, `->`
 
+import unittest2
+
 from private/format import formatFloat, formatMonoTime
 
 
 
-proc checkValid(formatter: (float) -> string; input: float; expected: string) =
+template checkValid(formatter: untyped; input: float; expected: string) =
     check formatter(input) == expected
 
 
