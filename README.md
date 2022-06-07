@@ -1,5 +1,6 @@
-# restic_autobackup
-An executable to be called regularly to backup a good amount of flexible files through restic. Made with Nim.
+# [restic_autobackup](https://github.com/jasyip/restic_autobackup.git)
+*An executable to be called regularly to backup a good amount of flexible files through restic. Made with Nim.*
+
 If you want to use [**restic**](https://restic.net/) to backup your system, you will stumble upon
 the fact that you must provide specific paths to backup and you might not know what you want to backup and what shouldn't be backed up.
 
