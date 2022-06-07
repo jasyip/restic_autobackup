@@ -21,7 +21,18 @@ It also excludes caches in certain directores you can specify, such as `/home` a
 
 ## Installation
 
-Install Nimble, then run
+This must be done with root privileges, the nature of this program is meant to be a system administrator utility.
+Only backing up your `$HOME` using with this program would defeat the purpose.
+
+Either `git clone https://github.com/jasyip/restic_autobackup.git && cd restic_autobackup` or download and unzip/extract a release in a system-wide location.
+
+Install [**Nimble**](https://nim-lang.org/install.html) in a system-wide location.
+
+To ensure it is installed in a system-wide location, I recommend writing
+```sh
+export NIMBLE_DIR='/opt/nimble'
+```
+to `/etc/profile.d/nimble.sh`, as it defaults to inside your `$HOME`.
 
 ```sh
 nimble install
@@ -29,7 +40,6 @@ nimble install
 
 while in the cloned git repository/release.
 
-Unfortunately, there will be some necessary tweaking to ensure that it is installed with root privileges. More guidance to come.
 
 
 ## Configuration
