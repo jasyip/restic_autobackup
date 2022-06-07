@@ -1,10 +1,11 @@
 
 from std/deques import initDeque, addLast, popLast, len, Deque
 from std/os import parentDir, dirExists, walkDir, lastPathPart, pcDir, pcLinkToDir
-from std/streams import write, FileStream
 from std/strformat import `&`
 
 from regex import re, contains
+
+from faststreams/outputs import OutputStream, write
 
 
 
@@ -15,7 +16,7 @@ const cacheRegex = re"\b[cC]ache|CACHE\b"
 
 
 
-proc addToStream(strm: FileStream; added: var uint; path: string) =
+proc addToStream(strm: OutputStream; added: var uint; path: string) =
     if added > 0:
         strm.write("\n")
 
@@ -26,7 +27,7 @@ proc addToStream(strm: FileStream; added: var uint; path: string) =
 
 
 
-proc exclusions*(strm: FileStream; baseDirs: openarray[string]): uint = 
+proc exclusions*(strm: OutputStream; baseDirs: openarray[string]): uint = 
 
 
 

@@ -1,5 +1,6 @@
 
 
+from std/exitprocs import addExitProc
 from std/monotimes import getMonoTime, `-`, MonoTime
 from std/options import some
 from std/os import `/`, parentDir, removeFile, getEnv, quoteShellCommand
@@ -8,17 +9,18 @@ from std/sequtils import concat
 from std/streams import openFileStream, close, FileStream
 from std/strformat import `&`
 from std/strutils import isEmptyOrWhitespace, join
-from std/times import cpuTime, Duration, inNanoseconds
 from std/tempfiles import genTempPath
+from std/times import cpuTime, Duration, inNanoseconds
 
 
 import argparse
 import chronicles
+from faststreams/outputs import OutputStream, fileOutput, close
 
 
-# from private/format import formatFloat, formatMonoTime
-from private/search import exclusions
+
 from private/parse import parseConfig
+from private/search import exclusions
 
 
 
@@ -131,8 +133,13 @@ proc main =
 
     debug "Temporary file to hold exclusions", path = specialFilesPath
 
+    var
+        exclusionCount: uint
+        cpuDelta: BiggestFloat
+        delta: BiggestFloat
+
     block:
-        var strm: FileStream = openFileStream(specialFilesPath, fmWrite)
+        var strm: OutputStream = fileOutput(specialFilesPath)
         defer:
             strm.close()
 
@@ -141,18 +148,29 @@ proc main =
             startCpuTime  : float    = cpuTime()
             startMonoTime : MonoTime = getMonoTime()
 
-        let exclusionCount: uint = exclusions(strm, baseDirs)
+        exclusionCount = exclusions(strm, baseDirs)
 
         let
             endCpuTime  : float    = cpuTime()
             endMonoTime : MonoTime = getMonoTime()
 
-        info(
-             "Traversal statistics",
-             exclusionCount = exclusionCount,
-             cpuSeconds = endCpuTime - startCpuTime,
-             seconds = parseMonoTime(endMonoTime - startMonoTime),
-            )
+        cpuDelta = endCpuTime - startCpuTime
+        delta = parseMonoTime(endMonoTime - startMonoTime)
+
+    proc removeSpecialFiles =
+
+        debug "Removed temporary file", path = specialFilesPath
+        removeFile(specialFilesPath)
+
+    addExitProc(removeSpecialFiles)
+
+    info(
+         "Traversal statistics",
+         exclusionCount = exclusionCount,
+         cpuSeconds = cpuDelta,
+         seconds = delta,
+        )
+
 
     info "Now executing restic command..."
 
@@ -195,11 +213,9 @@ proc main =
         exitCode = resticProcess.waitForExit()
         debug "Finished executing"
 
-    removeFile(specialFilesPath)
-    debug "Removed temporary file", path = specialFilesPath
 
     if exitCode != 0:
-        info "Restic returned", code=exitCode
+        info "Restic returned", code = exitCode
 
     quit exitCode
 
