@@ -16,8 +16,10 @@ It also excludes caches in certain directores you can specify, such as `/home` a
 - [Installation](#installation)
 - [Configuration](#configuration)
 
+---
 
-### Installation
+
+## Installation
 
 Install Nimble, then run
 
@@ -30,7 +32,7 @@ while in the cloned git repository/release.
 Unfortunately, there will be some necessary tweaking to ensure that it is installed with root privileges. More guidance to come.
 
 
-### Configuration
+## Configuration
 
 **TODO**
 
