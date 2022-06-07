@@ -1,6 +1,4 @@
-mode = ScriptMode.Verbose
-
-version = "0.2.0"
+version = "1.0.0a"
 author = "Jason Yip"
 description = "Passes only the necessary file paths to backup for restic"
 license = "GPL-2.0"

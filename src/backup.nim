@@ -96,6 +96,10 @@ proc main =
             echo p.help
             quit 1
 
+    except UsageError as e:
+        fatal "Usage Error", message=getCurrentExceptionMsg()
+        quit 1
+
     debug(
           "Parsed command line arguments",
           cfgFile = cfgFile,
@@ -158,13 +162,13 @@ proc main =
                                    @["backup"],
                                    resticOptions,
                                    @["--exclude-file", specialFilesPath],
-                                   baseDirs,
                                    (
                                    if "--exclude-caches" in resticOptions:
                                        @[]
                                    else:
                                        @["--exclude-caches"]
-                                   )
+                                   ),
+                                   baseDirs,
                                   )
 
     var exitCode: int = 0
