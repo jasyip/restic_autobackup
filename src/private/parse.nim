@@ -1,6 +1,5 @@
 
 
-from std/logging import warn
 from std/parsecfg import
                          CfgParser, CfgEvent, 
                          next, open, close,
@@ -10,6 +9,7 @@ from std/streams import Stream, close, write
 from std/strformat import `&`
 from std/strutils import cmpIgnoreStyle
 
+import chronicles
 
 
 
@@ -37,8 +37,12 @@ func cfgDetails(event: CfgEvent; parser: CfgParser): string =
 
 proc warnUnrecognizedCfg(event: CfgEvent; parser: CfgParser) =
     warn(
-          cfgDetails(event, parser) &
-          " will be ignored"
+         "Ignoring key-value pair in configuration file",
+         key = event.key,
+         value = event.value,
+         line = parser.getLine,
+         column = parser.getColumn,
+         filename = parser.getFilename,
         )
 
 func badDirectoryCfg(event: CfgEvent; parser: CfgParser): string =

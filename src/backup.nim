@@ -2,21 +2,21 @@
 
 from std/monotimes import getMonoTime, `-`, MonoTime
 from std/options import some
-from std/os import `/`, parentDir, removeFile, getEnv
+from std/os import `/`, parentDir, removeFile, getEnv, quoteShellCommand
 from std/osproc import startProcess, waitForExit, poParentStreams, poUsePath
 from std/sequtils import concat
 from std/streams import openFileStream, close, FileStream
 from std/strformat import `&`
 from std/strutils import isEmptyOrWhitespace, join
-from std/times import cpuTime
+from std/times import cpuTime, Duration, inNanoseconds
 from std/tempfiles import genTempPath
 
 
 import argparse
-# import chronicles
+import chronicles
 
 
-from private/format import formatFloat, formatMonoTime
+# from private/format import formatFloat, formatMonoTime
 from private/search import exclusions
 from private/parse import parseConfig
 
@@ -38,6 +38,9 @@ const
     defaultCfgPath: string = "/usr/local/share/restic_autobackup/backup.cfg"
     cfgPathEnvKey : string = "RESTIC_AUTOBACKUP_CFG_PATH"
 
+logStream userFriendly[textblocks[NoTimestamps, stderr]]
+publicLogScope:
+    stream = userFriendly
 
 
 
@@ -51,6 +54,9 @@ const
 
 
 
+
+proc parseMonoTime(duration: Duration): BiggestFloat =
+    toBiggestFloat(duration.inNanoseconds) / 1e9'f64
 
 
 
@@ -58,6 +64,7 @@ const
 proc main =
 
     let cfgPathEnvValue = getEnv(cfgPathEnvKey)
+
 
     var p = newParser:
         help("An executable to be called regularly to backup a good amount of flexible files through restic. Flexible configuration.")
@@ -70,15 +77,17 @@ proc main =
 
     try:
         let opts = p.parse()
-
         cfgFile = (
                    if not opts.configFile.isEmptyOrWhitespace:
-                      opts.configFile
+                       opts.configFile
                    elif not cfgPathEnvValue.isEmptyOrWhitespace:
-                      notice &"Using {cfgPathEnvKey}='{cfgPathEnvValue}' as configuration file path"
-                      cfgPathEnvValue
+                       notice(
+                              &"Using {cfgPathEnvKey} environmental variable",
+                              cfgPathEnvValue = &"'{cfgPathEnvValue}'",
+                             )
+                       cfgPathEnvValue
                    else:
-                      defaultCfgPath
+                       defaultCfgPath
                   )
         dryRun = opts.dryRun
 
@@ -87,21 +96,33 @@ proc main =
             echo p.help
             quit 1
 
+    debug(
+          "Parsed command line arguments",
+          cfgFile = cfgFile,
+          dryRun = dryRun,
+         )
 
 
     var cfgFileStream: FileStream
     try:
         cfgFileStream = openFileStream(cfgFile)
     except IOError:
-        raise newException(IOError, &"'{cfgFile}' does not exist or cannot be read.")
+        fatal(
+              "Unreadable/invalid/non-existent configuration file",
+              file = cfgFile,
+             )
+        quit 1
 
     let (baseDirs, resticOptions) = parseConfig(cfgFileStream, cfgFile)
 
 
 
-    info &"Analyzing files at {baseDirs}."
+    debug "Options parsed", options = resticOptions
+    info "Analyzing files", baseDirs = baseDirs
 
     let specialFilesPath: string = genTempPath("", "",)
+
+    debug "Temporary file to hold exclusions", path = specialFilesPath
 
     block:
         var strm: FileStream = openFileStream(specialFilesPath, fmWrite)
@@ -120,10 +141,10 @@ proc main =
             endMonoTime : MonoTime = getMonoTime()
 
         info(
-             &"Noted {exclusionCount} dirs/files to exclude" & " " &
-             &"in {formatFloat(endCpuTime - startCpuTime)} CPU seconds" & " and " &
-             &"{formatMonoTime(endMonoTime - startMonoTime)} seconds" & " " &
-              "for restic."
+             "Traversal statistics",
+             exclusionCount = exclusionCount,
+             cpuSeconds = endCpuTime - startCpuTime,
+             seconds = parseMonoTime(endMonoTime - startMonoTime),
             )
 
     info "Now executing restic command..."
@@ -133,27 +154,45 @@ proc main =
         args: seq[string] = concat(
                                    @["backup"],
                                    resticOptions,
-                                   @["--files-from-raw"], baseDirs,
                                    @["--exclude-file", specialFilesPath],
+                                   baseDirs,
+                                   (
+                                   if "--exclude-caches" in resticOptions:
+                                       @[]
+                                   else:
+                                       @["--exclude-caches"]
+                                   )
                                   )
 
     var exitCode: int = 0
 
+
     if dryRun:
-        echo &"Executing at {workingDir}: " & "restic" & " " & join(args, ",")
+        notice(
+               "Would execute",
+               workingDir = workingDir,
+               cmd = "restic" & " " & quoteShellCommand(args),
+              )
 
     else:
+        debug(
+              "Executing",
+              workingDir = workingDir,
+              cmd = "restic" & " " & quoteShellCommand(args),
+             )
         var resticProcess = startProcess(
                                          "restic", args = args,
                                          options = {poParentStreams, poUsePath},
                                          workingDir = workingDir,
                                         )
         exitCode = resticProcess.waitForExit()
+        debug "Finished executing"
 
     removeFile(specialFilesPath)
+    debug "Removed temporary file", path = specialFilesPath
 
     if exitCode != 0:
-        info &"restic returned status code {code}"
+        info "Restic returned", code=exitCode
 
     quit exitCode
 
