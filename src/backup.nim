@@ -115,9 +115,12 @@ proc main =
 
     let (baseDirs, resticOptions) = parseConfig(cfgFileStream, cfgFile)
 
-
-
     debug "Options parsed", options = resticOptions
+
+    if baseDirs.len == 0:
+        error "No directories to search were found in configuration file"
+        quit 1
+
     info "Analyzing files", baseDirs = baseDirs
 
     let specialFilesPath: string = genTempPath("", "",)

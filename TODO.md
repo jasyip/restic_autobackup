@@ -1,2 +1,3 @@
 
-- Implement test cases for `search`
+- Implement test cases for `private/search.nim`
+- Populate `README.md`
