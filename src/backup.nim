@@ -1,7 +1,6 @@
 
 
 from std/exitprocs import addExitProc
-from std/monotimes import getMonoTime, `-`, MonoTime
 from std/options import some
 from std/os import `/`, parentDir, removeFile, getEnv, quoteShellCommand
 from std/osproc import startProcess, waitForExit, poParentStreams, poUsePath
@@ -10,7 +9,6 @@ from std/streams import openFileStream, close, FileStream
 from std/strformat import `&`
 from std/strutils import isEmptyOrWhitespace, join
 from std/tempfiles import genTempPath
-from std/times import cpuTime, Duration, inNanoseconds
 
 
 import argparse
@@ -20,7 +18,7 @@ from faststreams/outputs import OutputStream, fileOutput, close
 
 import private/logging 
 from private/parse import parseConfig
-from private/search import exclusions
+from private/search import exclusions, exclusionsWStats
 
 
 
@@ -37,8 +35,17 @@ from private/search import exclusions
 
 
 const
-    defaultCfgPath: string = "/usr/local/share/restic_autobackup/backup.cfg"
-    cfgPathEnvKey : string = "RESTIC_AUTOBACKUP_CFG_PATH"
+    defaultCfgPath {. strdefine  .}: string = "/usr/local/share/restic_autobackup/backup.cfg"
+    cfgPathEnvKey  {. strdefine  .}: string = "RESTIC_AUTOBACKUP_CFG_PATH"
+    rabShowStats   {. booldefine .}: bool   = true
+
+when rabShowStats:
+    from std/monotimes import getMonoTime, `-`, MonoTime
+    from std/times import cpuTime, Duration, inNanoseconds
+    from private/search import SearchStats
+
+    proc parseMonoTime(duration: Duration): BiggestFloat =
+        toBiggestFloat(duration.inNanoseconds) / 1e9'f64
 
 
 
@@ -52,17 +59,12 @@ const
 
 
 
-
-
-proc parseMonoTime(duration: Duration): BiggestFloat =
-    toBiggestFloat(duration.inNanoseconds) / 1e9'f64
 
 
 
 
 proc main =
 
-    let cfgPathEnvValue = getEnv(cfgPathEnvKey)
 
 
     var p = newParser:
@@ -74,99 +76,86 @@ proc main =
         cfgFile: string
         dryRun: bool
 
-    try:
-        let opts = p.parse()
-        cfgFile = (
-                   if not opts.configFile.isEmptyOrWhitespace:
-                       opts.configFile
-                   elif not cfgPathEnvValue.isEmptyOrWhitespace:
-                       notice(
-                              &"Using {cfgPathEnvKey} environmental variable",
-                              cfgPathEnvValue = &"'{cfgPathEnvValue}'",
-                             )
-                       cfgPathEnvValue
-                   else:
-                       defaultCfgPath
-                  )
-        dryRun = opts.dryRun
+    block:
+        let cfgPathEnvValue = getEnv(cfgPathEnvKey)
 
-    except ShortCircuit as e:
-        if e.flag == "argparse_help":
-            echo p.help
+        try:
+            let opts = p.parse()
+            cfgFile = (
+                       if not opts.configFile.isEmptyOrWhitespace:
+                           opts.configFile
+                       elif not cfgPathEnvValue.isEmptyOrWhitespace:
+                           notice(
+                                  &"Using {cfgPathEnvKey} environmental variable",
+                                  cfgPathEnvValue,
+                                 )
+                           cfgPathEnvValue
+                       else:
+                           defaultCfgPath
+                      )
+            dryRun = opts.dryRun
+
+        except ShortCircuit as e:
+            if e.flag == "argparse_help":
+                echo p.help
+                quit 1
+
+        except UsageError:
+            fatal "Usage Error", message = getCurrentExceptionMsg()
             quit 1
 
-    except UsageError:
-        fatal "Usage Error", message = getCurrentExceptionMsg()
-        quit 1
-
-    debug(
-          "Parsed command line arguments",
-          cfgFile = cfgFile,
-          dryRun = dryRun,
-         )
+    debug("Parsed command line arguments", cfgFile, dryRun)
 
 
-    var cfgFileStream: FileStream
+    var
+        baseDirs: seq[string]
+        resticOptions: seq[string]
+
     try:
-        cfgFileStream = openFileStream(cfgFile)
+        (baseDirs, resticOptions) = parseConfig(openFileStream(cfgFile), cfgFile)
     except IOError:
-        fatal(
-              "Unreadable/invalid/non-existent configuration file",
-              file = cfgFile,
-             )
+        fatal("Unreadable/invalid/non-existent configuration file", cfgFile)
         quit 1
 
-    let (baseDirs, resticOptions) = parseConfig(cfgFileStream, cfgFile)
 
-    debug "Options parsed", options = resticOptions
+    debug("Options for Restic parsed", resticOptions)
 
     if baseDirs.len == 0:
         error "No directories to search were found in configuration file"
         quit 1
 
-    info "Analyzing files", baseDirs = baseDirs
+    info("Analyzing files", baseDirs)
 
-    let specialFilesPath: string = genTempPath("", "",)
+    let specialFilesPath: string = genTempPath("", "")
 
-    debug "Temporary file to hold exclusions", path = specialFilesPath
+    debug("Temporary file to hold exclusions", path = specialFilesPath)
 
-    var
-        exclusionCount: uint
-        cpuDelta: BiggestFloat
-        delta: BiggestFloat
+    proc removeSpecialFiles =
+        debug "Removed temporary file", path = specialFilesPath
+        removeFile specialFilesPath
+
+    addExitProc(removeSpecialFiles)
+
+
 
     block:
         var strm: OutputStream = fileOutput(specialFilesPath)
         defer:
             strm.close()
 
+        when rabShowStats:
+            let startMonoTime: MonoTime = getMonoTime()
+            let searchStats: SearchStats = exclusionsWStats(strm, baseDirs)
+            let endMonoTime: MonoTime = getMonoTime()
 
-        let
-            startCpuTime  : float    = cpuTime()
-            startMonoTime : MonoTime = getMonoTime()
-
-        exclusionCount = exclusions(strm, baseDirs)
-
-        let
-            endCpuTime  : float    = cpuTime()
-            endMonoTime : MonoTime = getMonoTime()
-
-        cpuDelta = endCpuTime - startCpuTime
-        delta = parseMonoTime(endMonoTime - startMonoTime)
-
-    proc removeSpecialFiles =
-
-        debug "Removed temporary file", path = specialFilesPath
-        removeFile specialFilesPath
-
-    addExitProc(removeSpecialFiles)
-
-    info(
-         "Traversal statistics",
-         exclusionCount = exclusionCount,
-         cpuSeconds = cpuDelta,
-         seconds = delta,
-        )
+            info(
+                 "Traversal statistics",
+                 exclusionCount = searchStats.exclusionCount,
+                 cpuSeconds = searchStats.cpuSeconds,
+                 seconds = parseMonoTime(endMonoTime - startMonoTime),
+                )
+        else:
+            exclusions(strm, baseDirs)
 
 
     info "Now executing restic command..."
@@ -192,14 +181,14 @@ proc main =
     if dryRun:
         notice(
                "Would execute",
-               workingDir = workingDir,
+               workingDir,
                cmd = "restic" & " " & quoteShellCommand(args),
               )
 
     else:
         debug(
               "Executing",
-              workingDir = workingDir,
+              workingDir,
               cmd = "restic" & " " & quoteShellCommand(args),
              )
         var resticProcess = startProcess(
@@ -212,7 +201,7 @@ proc main =
 
 
     if exitCode != 0:
-        info "Restic returned", code = exitCode
+        info "Restic returned", exitCode
 
     quit exitCode
 

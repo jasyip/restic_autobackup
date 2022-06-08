@@ -54,12 +54,11 @@ proc parseConfig*(
                   cfgStream: Stream,
                   streamName = "",
                  ):
-                 tuple[
-                  baseDirs: seq[string],
-                  resticOptions: seq[string],
-                 ]
-
-                 =
+                  tuple[
+                    baseDirs: seq[string],
+                    resticOptions: seq[string],
+                  ]
+                  =
 
     var
         parser: CfgParser

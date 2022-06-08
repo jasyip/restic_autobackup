@@ -8,8 +8,10 @@ from std/locks import
 from std/os import parentDir, dirExists, walkDir, lastPathPart, pcDir, pcLinkToDir
 from std/sequtils import toSeq
 from std/strformat import `&`
+from std/sugar import `=>`
+from std/times import cpuTime
 
-from regex import re, contains
+from regex import re, contains, Regex
 from faststreams/outputs import OutputStream, write
 
 
@@ -18,7 +20,11 @@ import ./logging
 
 
 
-const cacheRegex = re"\b[cC]ache|CACHE\b"
+
+const
+    rabShowStats  {. booldefine .}: bool   = true
+    cacheRegexStr {. strdefine  .}: string = r"\b[cC]ache|CACHE\b"
+    cacheRegex: Regex = re(cacheRegexStr)
 
 
 
@@ -27,36 +33,44 @@ const cacheRegex = re"\b[cC]ache|CACHE\b"
 
 
 
+type
+    ThreadArgRoot {. inheritable .} = object
+        ind                  :     uint
+        dir                  :     string
+        availableThreadInds  : ptr seq[uint]    # thread management
+        stream               :     OutputStream # stream
+        streamLock           : ptr Lock
+        threadManagementLock : ptr Lock
+        threadManagementCond : ptr Cond
+
+    ExtraArgRoot {. inheritable .} = object
+    ExtraArgMinimal = object of ExtraArgRoot
+        firstAdd: bool
+
+    ReturnRoot* {. inheritable .} = object
 
 
 
-type ThreadArg = object
-    ind                  :     uint
-    dir                  :     string
-    availableThreadInds  : ptr seq[uint]    # thread management
-    exclusionCount       : ptr uint         # thread management
-    stream               :     OutputStream # stream
-    streamLock           : ptr Lock
-    threadManagementLock : ptr Lock
-    threadManagementCond : ptr Cond
+    SearchStats* = object
+        cpuSeconds    * : float
+        exclusionCount* : uint
+
+    ThreadArgStats = object of ThreadArgRoot
+        stats: ptr SearchStats
+    ExtraArgStats = object of ExtraArgRoot
+        startCpuTime: float
+        endCpuTime: float
+        exclusionCount: uint
+
+    ReturnStats = object of ReturnRoot
+        stats: SearchStats
 
 
 
 
-proc addToStream(strm: OutputStream; added: var uint; path: string) =
-    if added > 0:
-        strm.write("\n")
-
-    added += 1
-
-    strm.write(path)
 
 
-
-
-proc searchDirectory(arg: ThreadArg) {. thread .} =
-
-
+proc threadStart(arg: ThreadArgRoot) =
     acquire arg.threadManagementLock[]
     debug(
           "Starting directory search",
@@ -66,30 +80,105 @@ proc searchDirectory(arg: ThreadArg) {. thread .} =
          )
     release arg.threadManagementLock[]
 
-    var exclusionCount: uint = 0
 
-    proc makeAvailable =
 
+method makeAvailableLog(arg: ThreadArgRoot; extraArgs: ExtraArgRoot) {. base .} = discard
+method makeAvailableLog(arg: ThreadArgRoot; extraArgs: ExtraArgMinimal) =
+    procCall makeAvailableLog(ThreadArgRoot(arg), ExtraArgRoot(extraArgs))
+    debug(
+          "Finished searching directory",
+          dir = arg.dir,
+          addedAnything = not extraArgs.firstAdd,
+          threadInd = arg.ind,
+          availableThreadInds = arg.availableThreadInds[],
+         )
+
+method makeAvailableLog(arg: ThreadArgStats; extraArgs: ExtraArgStats) =
+    procCall makeAvailableLog(ThreadArgRoot(arg), ExtraArgRoot(extraArgs))
+
+    let cpuDelta: float = max(extraArgs.endCpuTime - extraArgs.startCpuTime, 0.0)
+    debug(
+          "Finished searching directory",
+          dir = arg.dir,
+          cpuSeconds = cpuDelta,
+          numAddedExclusions = extraArgs.exclusionCount,
+          threadInd = arg.ind,
+          availableThreadInds = arg.availableThreadInds[],
+         )
+
+    arg.stats[].cpuSeconds += cpuDelta
+    arg.stats[].exclusionCount += extraArgs.exclusionCount
+
+
+proc makeAvailable(arg: ThreadArgRoot; extraArgs: ExtraArgRoot) =
+
+    proc destructor =
         acquire arg.threadManagementLock[]
-
-        arg.availableThreadInds[].add arg.ind
-
-        debug(
-              "Finished searching directory",
-              dir = arg.dir,
-              numAddedExclusions = exclusionCount,
-              threadInd = arg.ind,
-              availableThreadInds = arg.availableThreadInds[]
-             )
-        arg.exclusionCount[] += exclusionCount
-
-
+        arg.availableThreadInds[].add(arg.ind)
+        makeAvailableLog(arg, extraArgs)
         broadcast arg.threadManagementCond[]
         release arg.threadManagementLock[]
 
+    onThreadDestruction(destructor)
 
-    onThreadDestruction makeAvailable
 
+
+method initExtraArgs(_: ThreadArgRoot): ExtraArgRoot {. base .} =
+    ExtraArgMinimal(firstAdd: true)
+
+method initExtraArgs(_: ThreadArgStats): ExtraArgRoot =
+    ExtraArgStats(
+                  startCpuTime: 0.0,
+                  endCpuTime: 0.0,
+                  exclusionCount: 0,
+                 )
+
+
+method searchStart(_: var ExtraArgRoot) {. base .} = discard
+method searchStart(extraArgs: var ExtraArgStats) =
+    procCall searchStart(ExtraArgRoot(extraArgs))
+    extraArgs.startCpuTime = cpuTime()
+
+
+method addToStream(strm: OutputStream; extraArgs: var ExtraArgRoot; path: string) {. base .} =
+    strm.write(path)
+method addToStream(strm: OutputStream; extraArgs: var ExtraArgMinimal; path: string) =
+    if extraArgs.firstAdd:
+        extraArgs.firstAdd = false
+    else
+        strm.write("\n")
+
+    procCall addToStream(strm, ExtraArgRoot(extraArgs), path)
+
+method addToStream(strm: OutputStream; extraArgs: var ExtraArgStats; path: string) =
+    if extraArgs.exclusionCount > 0:
+        strm.write("\n")
+    extraArgs.exclusionCount += 1
+
+    procCall addToStream(strm, ExtraArgRoot(extraArgs), path)
+
+
+method searchEnd(_: var ExtraArgRoot) {. base .} = discard
+method searchEnd(extraArgs: var ExtraArgStats) =
+    procCall searchEnd(ExtraArgRoot(extraArgs))
+    extraArgs.endCpuTime = cpuTime()
+
+
+
+
+
+
+proc searchDirectory(arg: ThreadArgRoot) {. thread .} =
+
+    threadStart(arg)
+
+    var extraArgs: ExtraArgRoot = initExtraArgs(arg)
+
+    makeAvailable(arg, extraArgs)
+
+
+
+    searchStart(extraArgs)
 
     if not dirExists(arg.dir):
         raise newException(OSError, &"'{arg.dir}' may be nonexistent/inaccessible")
@@ -97,7 +186,7 @@ proc searchDirectory(arg: ThreadArg) {. thread .} =
 
     proc addPath(path: string) =
         acquire arg.streamLock[]
-        addToStream(arg.stream, exclusionCount, path)
+        addToStream(arg.stream, extraArgs, path)
         release arg.streamLock[]
 
     proc shouldExclude(curDir: string): bool = contains(curDir.lastPathPart, cacheRegex)
@@ -117,71 +206,136 @@ proc searchDirectory(arg: ThreadArg) {. thread .} =
                 elif kind != pcLinkToDir and curDir.shouldExclude:
                     addPath nextPath
 
+    searchEnd(extraArgs)
 
 
 
-proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint = 
 
-    if baseDirs.len == 0: return 0
+
+
+
+
+method initThreadArg(
+                     ind: uint;
+                     dir: string;
+                     availableThreadInds: ptr seq[uint];
+                     stream: OutputStream;
+                     streamLock: ptr Lock;
+                     threadManagementLock: ptr Lock;
+                     threadManagementCond: ptr Cond;
+                     returnObj: ReturnRoot
+                    ): ThreadArgRoot {. base .} =
+    ThreadArgRoot(
+                  ind: ind,
+                  dir: dir,
+                  availableThreadInds: availableThreadInds,
+                  stream: stream,
+                  streamLock: streamLock,
+                  threadManagementLock: threadManagementLock,
+                  threadManagementCond: threadManagementCond,
+                 )
+
+method initThreadArg(
+                     ind: uint;
+                     dir: string;
+                     availableThreadInds: ptr seq[uint];
+                     stream: OutputStream;
+                     streamLock: ptr Lock;
+                     threadManagementLock: ptr Lock;
+                     threadManagementCond: ptr Cond;
+                     returnObj: ReturnStats
+                    ): ThreadArgRoot =
+    ThreadArgStats(
+                   ind: ind,
+                   dir: dir,
+                   availableThreadInds: availableThreadInds,
+                   stream: stream,
+                   streamLock: streamLock,
+                   threadManagementLock: threadManagementLock,
+                   threadManagementCond: threadManagementCond,
+                   stats: addr returnObj.stats,
+                 )
+
+method zeroResults(returnObj: var ReturnRoot) {. base .}
+method zeroResults(returnObj: var ReturnStats) {. base .} =
+    returnObj = ReturnStats(stats: SearchStats(cpuSeconds: 0.0, exclusionCount: 0))
+
+
+
+proc internalExclusionsProc(stream: OutputStream; baseDirs: openarray[string], returnObj: var ReturnRoot) = 
+
+    if baseDirs.len == 0:
+        zeroResults(returnObj)
+        return
 
     let nThreads: uint = min(cast[uint](baseDirs.len), max(cast[uint](countProcessors()), 1'u))
-    var
-        threads: seq[Thread[ThreadArg]] = newSeq[Thread[ThreadArg]](nThreads)
-        availableThreadInds: seq[uint] = toSeq(0'u ..< nThreads)
-        streamLock: Lock
-        threadManagementLock: Lock
-        threadManagementCond: Cond
+    var availableThreadInds: seq[uint] = toSeq(0'u ..< nThreads)
 
-    initLock streamLock
-    initLock threadManagementLock
-    initCond threadManagementCond
+    block:
+        var
+            threads: seq[Thread[ThreadArgRoot]] = newSeq[Thread[ThreadArgRoot]](nThreads)
+            streamLock: Lock
+            threadManagementLock: Lock
+            threadManagementCond: Cond
 
-
-
-    var curDirInd: uint = 0
+        initLock streamLock
+        initLock threadManagementLock
+        initCond threadManagementCond
 
 
-    while curDirInd < cast[uint](baseDirs.len):
+        for i in 0'u ..< cast[uint](baseDirs.len):
 
-        acquire threadManagementLock
-        while availableThreadInds.len == 0:
-            wait(threadManagementCond, threadManagementLock)
+            acquire threadManagementLock
+            while availableThreadInds.len == 0:
+                threadManagementCond.wait(threadManagementLock)
 
-        # Use an available thread
-        let threadInd: uint = availableThreadInds.pop
-        release threadManagementLock
+            # Use an available thread
+            let threadInd: uint = availableThreadInds.pop
+            release threadManagementLock
 
-        let arg = ThreadArg(
-                            ind: threadInd,
-                            dir: baseDirs[curDirInd],
-                            availableThreadInds: addr availableThreadInds,
-                            stream: stream,
-                            exclusionCount: addr result,
-                            streamLock: addr streamLock,
-                            threadManagementLock: addr threadManagementLock,
-                            threadManagementCond: addr threadManagementCond,
-                           )
-        createThread(threads[threadInd], searchDirectory, arg)
-
-        curDirInd.inc
-
-    for i, thread in threads.mpairs:
-        debug(
-              "Thread follow-up",
-              threadInd = i,
-              stillRunning = thread.running,
-             )
-        joinThread thread
+            let arg = initThreadArg(
+                                    ind = threadInd,
+                                    dir = baseDirs[i],
+                                    availableThreadInds = addr availableThreadInds,
+                                    stream = stream,
+                                    streamLock = addr streamLock,
+                                    threadManagementLock = addr threadManagementLock,
+                                    threadManagementCond = addr threadManagementCond,
+                                    returnObj = stats,
+                                   )
+            createThread(threads[threadInd], searchDirectory, arg)
 
 
-    deinitLock streamLock
-    deinitLock threadManagementLock
-    deinitCond threadManagementCond
+        for i, thread in threads.mpairs:
+            debug(
+                  "Thread follow-up",
+                  threadInd = i,
+                  stillRunning = thread.running,
+                 )
+            joinThread thread
+
+
+        deinitLock streamLock
+        deinitLock threadManagementLock
+        deinitCond threadManagementCond
 
     debug(
           "Thread Management",
-          nThreads = nThreads,
+          nThreads,
           availableThreadIndsLen = availableThreadInds.len,
-          availableThreadInds = availableThreadInds,
+          availableThreadInds,
          )
 
+
+
+proc exclusions*(stream: OutputStream; baseDirs: openarray[string]) = 
+
+    var returnObj: ReturnRoot
+    internalExclusionsProc(stream, baseDirs, returnObj)
+
+
+proc exclusionsWStats*(stream: OutputStream; baseDirs: openarray[string]): SearchStats = 
+
+    var returnObj: ReturnStats
+    internalExclusionsProc(stream, baseDirs, returnObj)
+    return returnObj.stats
