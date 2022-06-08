@@ -1,6 +1,5 @@
 
 from std/cpuinfo import countProcessors
-from std/deques import initDeque, toDeque, addLast, popLast, len, Deque
 
 from std/locks import
                       initLock, acquire, release, deinitLock, Lock,
@@ -25,6 +24,25 @@ const cacheRegex = re"\b[cC]ache|CACHE\b"
 
 
 
+
+
+
+
+
+
+type ThreadArg = object
+    ind                  :     uint
+    dir                  :     string
+    availableThreadInds  : ptr seq[uint]    # thread management
+    exclusionCount       : ptr uint         # thread management
+    stream               :     OutputStream # stream
+    streamLock           : ptr Lock
+    threadManagementLock : ptr Lock
+    threadManagementCond : ptr Cond
+
+
+
+
 proc addToStream(strm: OutputStream; added: var uint; path: string) =
     if added > 0:
         strm.write("\n")
@@ -36,27 +54,35 @@ proc addToStream(strm: OutputStream; added: var uint; path: string) =
 
 
 
-
-
-type ThreadArg = object
-    ind: uint
-    dir: string
-    availableThreadInds: ptr Deque[uint]
-    exclusionCount: ptr uint
-    stream: OutputStream
-    streamLock: ptr Lock
-    threadManagementLock: ptr Lock
-    threadManagementCond: ptr Cond 
-
-
-
 proc searchDirectory(arg: ThreadArg) {. thread .} =
+
+
+    acquire arg.threadManagementLock[]
+    debug(
+          "Starting directory search",
+          dir = arg.dir,
+          threadInd = arg.ind,
+          availableThreadInds = arg.availableThreadInds[]
+         )
+    release arg.threadManagementLock[]
+
+    var exclusionCount: uint = 0
 
     proc makeAvailable =
 
         acquire arg.threadManagementLock[]
 
-        arg.availableThreadInds[].addLast arg.ind
+        arg.availableThreadInds[].add arg.ind
+
+        debug(
+              "Finished searching directory",
+              dir = arg.dir,
+              numAddedExclusions = exclusionCount,
+              threadInd = arg.ind,
+              availableThreadInds = arg.availableThreadInds[]
+             )
+        arg.exclusionCount[] += exclusionCount
+
 
         broadcast arg.threadManagementCond[]
         release arg.threadManagementLock[]
@@ -69,18 +95,17 @@ proc searchDirectory(arg: ThreadArg) {. thread .} =
         raise newException(OSError, &"'{arg.dir}' may be nonexistent/inaccessible")
 
 
-    template addPath(path: string) =
+    proc addPath(path: string) =
         acquire arg.streamLock[]
-        addToStream(arg.stream, arg.exclusionCount[], path)
+        addToStream(arg.stream, exclusionCount, path)
         release arg.streamLock[]
 
     proc shouldExclude(curDir: string): bool = contains(curDir.lastPathPart, cacheRegex)
 
-    var stack: Deque[string] = initDeque[string]()
-    stack.addLast(arg.dir)
+    var stack: seq[string] = @[arg.dir]
 
     while stack.len > 0:
-        let curDir: string = stack.popLast()
+        let curDir: string = stack.pop
         if curDir.shouldExclude:
             # Keep traversing
             addPath curDir
@@ -88,9 +113,11 @@ proc searchDirectory(arg: ThreadArg) {. thread .} =
 
             for kind, nextPath in walkDir(curDir):
                 if kind == pcDir:
-                    stack.addLast(nextPath)
+                    stack.add nextPath
                 elif kind != pcLinkToDir and curDir.shouldExclude:
                     addPath nextPath
+
+
 
 
 proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint = 
@@ -100,7 +127,7 @@ proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint =
     let nThreads: uint = min(cast[uint](baseDirs.len), max(cast[uint](countProcessors()), 1'u))
     var
         threads: seq[Thread[ThreadArg]] = newSeq[Thread[ThreadArg]](nThreads)
-        availableThreadInds: Deque[uint] = toSeq(0'u ..< nThreads).toDeque
+        availableThreadInds: seq[uint] = toSeq(0'u ..< nThreads)
         streamLock: Lock
         threadManagementLock: Lock
         threadManagementCond: Cond
@@ -121,7 +148,7 @@ proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint =
             wait(threadManagementCond, threadManagementLock)
 
         # Use an available thread
-        let threadInd: uint = availableThreadInds.popLast
+        let threadInd: uint = availableThreadInds.pop
         release threadManagementLock
 
         let arg = ThreadArg(
@@ -138,14 +165,23 @@ proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint =
 
         curDirInd.inc
 
-    for thread in threads.mitems:
+    for i, thread in threads.mpairs:
+        debug(
+              "Thread follow-up",
+              threadInd = i,
+              stillRunning = thread.running,
+             )
         joinThread thread
-
-    debug "Thread Management", nThreads = nThreads, threads = threads, availableThreadInds = availableThreadInds
 
 
     deinitLock streamLock
     deinitLock threadManagementLock
     deinitCond threadManagementCond
 
+    debug(
+          "Thread Management",
+          nThreads = nThreads,
+          availableThreadIndsLen = availableThreadInds.len,
+          availableThreadInds = availableThreadInds,
+         )
 
