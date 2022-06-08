@@ -14,11 +14,11 @@ from std/times import cpuTime, Duration, inNanoseconds
 
 
 import argparse
-import chronicles
 from faststreams/outputs import OutputStream, fileOutput, close
 
 
 
+import private/logging 
 from private/parse import parseConfig
 from private/search import exclusions
 
@@ -40,9 +40,6 @@ const
     defaultCfgPath: string = "/usr/local/share/restic_autobackup/backup.cfg"
     cfgPathEnvKey : string = "RESTIC_AUTOBACKUP_CFG_PATH"
 
-logStream userFriendly[textblocks[NoTimestamps, stderr]]
-publicLogScope:
-    stream = userFriendly
 
 
 
@@ -98,8 +95,8 @@ proc main =
             echo p.help
             quit 1
 
-    except UsageError as e:
-        fatal "Usage Error", message=getCurrentExceptionMsg()
+    except UsageError:
+        fatal "Usage Error", message = getCurrentExceptionMsg()
         quit 1
 
     debug(
@@ -160,7 +157,7 @@ proc main =
     proc removeSpecialFiles =
 
         debug "Removed temporary file", path = specialFilesPath
-        removeFile(specialFilesPath)
+        removeFile specialFilesPath
 
     addExitProc(removeSpecialFiles)
 
@@ -181,10 +178,10 @@ proc main =
                                    resticOptions,
                                    @["--exclude-file", specialFilesPath],
                                    (
-                                   if "--exclude-caches" in resticOptions:
-                                       @[]
-                                   else:
-                                       @["--exclude-caches"]
+                                    if "--exclude-caches" in resticOptions:
+                                        @[]
+                                    else:
+                                        @["--exclude-caches"]
                                    ),
                                    baseDirs,
                                   )

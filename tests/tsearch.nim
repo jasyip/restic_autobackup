@@ -83,4 +83,3 @@ suite "test cache location detection":
         processInput()
 
 
-    removeDir(testingPath)

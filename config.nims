@@ -8,3 +8,5 @@ else:
     switch("debugger", "native")
 
 switch("define", "chronicles_indent=4")
+
+switch("threads", "on")

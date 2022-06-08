@@ -9,7 +9,7 @@ from std/streams import Stream, close, write
 from std/strformat import `&`
 from std/strutils import cmpIgnoreStyle
 
-import chronicles
+import ./logging
 
 
 

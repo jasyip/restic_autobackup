@@ -1,11 +1,20 @@
 
-from std/deques import initDeque, addLast, popLast, len, Deque
+from std/cpuinfo import countProcessors
+from std/deques import initDeque, toDeque, addLast, popLast, len, Deque
+
+from std/locks import
+                      initLock, acquire, release, deinitLock, Lock,
+                      initCond, wait, broadcast, deinitCond, Cond
+
 from std/os import parentDir, dirExists, walkDir, lastPathPart, pcDir, pcLinkToDir
+from std/sequtils import toSeq
 from std/strformat import `&`
 
 from regex import re, contains
-
 from faststreams/outputs import OutputStream, write
+
+
+import ./logging
 
 
 
@@ -27,32 +36,116 @@ proc addToStream(strm: OutputStream; added: var uint; path: string) =
 
 
 
-proc exclusions*(strm: OutputStream; baseDirs: openarray[string]): uint = 
+
+
+type ThreadArg = object
+    ind: uint
+    dir: string
+    availableThreadInds: ptr Deque[uint]
+    exclusionCount: ptr uint
+    stream: OutputStream
+    streamLock: ptr Lock
+    threadManagementLock: ptr Lock
+    threadManagementCond: ptr Cond 
 
 
 
-    template addPath(path: string) = addToStream(strm, result, path)
+proc searchDirectory(arg: ThreadArg) {. thread .} =
+
+    proc makeAvailable =
+
+        acquire arg.threadManagementLock[]
+
+        arg.availableThreadInds[].addLast arg.ind
+
+        broadcast arg.threadManagementCond[]
+        release arg.threadManagementLock[]
+
+
+    onThreadDestruction makeAvailable
+
+
+    if not dirExists(arg.dir):
+        raise newException(OSError, &"'{arg.dir}' may be nonexistent/inaccessible")
+
+
+    template addPath(path: string) =
+        acquire arg.streamLock[]
+        addToStream(arg.stream, arg.exclusionCount[], path)
+        release arg.streamLock[]
+
     proc shouldExclude(curDir: string): bool = contains(curDir.lastPathPart, cacheRegex)
 
-    for baseDir in baseDirs:
+    var stack: Deque[string] = initDeque[string]()
+    stack.addLast(arg.dir)
 
-        if not dirExists(baseDir):
-            raise newException(OSError, &"'{baseDir}' could not be accessed")
+    while stack.len > 0:
+        let curDir: string = stack.popLast()
+        if curDir.shouldExclude:
+            # Keep traversing
+            addPath curDir
+        else:
 
-    for baseDir in baseDirs:
+            for kind, nextPath in walkDir(curDir):
+                if kind == pcDir:
+                    stack.addLast(nextPath)
+                elif kind != pcLinkToDir and curDir.shouldExclude:
+                    addPath nextPath
 
-        var stack: Deque[string] = initDeque[string]()
-        stack.addLast(baseDir)
 
-        while stack.len > 0:
-            let curDir: string = stack.popLast()
-            if curDir.shouldExclude:
-                # Keep traversing
-                addPath curDir
-            else:
+proc exclusions*(stream: OutputStream; baseDirs: openarray[string]): uint = 
 
-                for kind, nextPath in walkDir(curDir):
-                    if kind == pcDir:
-                        stack.addLast(nextPath)
-                    elif kind != pcLinkToDir and curDir.shouldExclude:
-                        addPath nextPath
+    if baseDirs.len == 0: return 0
+
+    let nThreads: uint = min(cast[uint](baseDirs.len), max(cast[uint](countProcessors()), 1'u))
+    var
+        threads: seq[Thread[ThreadArg]] = newSeq[Thread[ThreadArg]](nThreads)
+        availableThreadInds: Deque[uint] = toSeq(0'u ..< nThreads).toDeque
+        streamLock: Lock
+        threadManagementLock: Lock
+        threadManagementCond: Cond
+
+    initLock streamLock
+    initLock threadManagementLock
+    initCond threadManagementCond
+
+
+
+    var curDirInd: uint = 0
+
+
+    while curDirInd < cast[uint](baseDirs.len):
+
+        acquire threadManagementLock
+        while availableThreadInds.len == 0:
+            wait(threadManagementCond, threadManagementLock)
+
+        # Use an available thread
+        let threadInd: uint = availableThreadInds.popLast
+        release threadManagementLock
+
+        let arg = ThreadArg(
+                            ind: threadInd,
+                            dir: baseDirs[curDirInd],
+                            availableThreadInds: addr availableThreadInds,
+                            stream: stream,
+                            exclusionCount: addr result,
+                            streamLock: addr streamLock,
+                            threadManagementLock: addr threadManagementLock,
+                            threadManagementCond: addr threadManagementCond,
+                           )
+        createThread(threads[threadInd], searchDirectory, arg)
+
+        curDirInd.inc
+
+    for thread in threads.mitems:
+        joinThread thread
+
+    debug "Thread Management", nThreads = nThreads, threads = threads, availableThreadInds = availableThreadInds
+
+
+    deinitLock streamLock
+    deinitLock threadManagementLock
+    deinitCond threadManagementCond
+
+
